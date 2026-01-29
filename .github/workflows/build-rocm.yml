@@ -17,6 +17,7 @@ jobs:
           apt-get install -y git python3-pip
           
           # Install deps for the SYSTEM python (3.10) which runs the build script
+          # We need 'packaging' and 'flatbuffers' here so build.py doesn't crash
           /usr/bin/python3 -m pip install packaging flatbuffers
 
       - name: Checkout ONNX Runtime
@@ -36,6 +37,7 @@ jobs:
       - name: Install Target Python Dependencies
         run: |
           # Install dependencies for the TARGET Python (3.9)
+          # We need numpy here so we can link against it
           python -m pip install --upgrade pip setuptools wheel cmake ninja numpy==1.26.1 packaging
 
       - name: Build ONNX Runtime and Wheel
@@ -44,8 +46,18 @@ jobs:
           HIP_PATH: /opt/rocm/hip
           HSA_OVERRIDE_GFX_VERSION: 10.3.0
         run: |
-          PY39_PATH=$(which python)
-          echo "Targeting Python: $PY39_PATH"
+          # 1. Capture Target Python Paths
+          PY39_EXE=$(which python)
+          
+          # Calculate exact numpy include path for Python 3.9
+          PY39_NUMPY_INC=$(python -c "import numpy; print(numpy.get_include())")
+          
+          echo "Target Python: $PY39_EXE"
+          echo "Target NumPy: $PY39_NUMPY_INC"
+
+          # 2. Run Build Script
+          # We use System Python (3.10) to run the script (to support new syntax)
+          # But we pass CMake flags to FORCE it to link against Python 3.9
           
           /usr/bin/python3 tools/ci_build/build.py \
             --build_dir build \
@@ -61,7 +73,8 @@ jobs:
                 onnxruntime_ROCM_HOME=/opt/rocm \
                 onnxruntime_USE_MIGRAPHX=ON \
                 CMAKE_HIP_ARCHITECTURES=gfx90a,gfx908,gfx1030 \
-                PYTHON_EXECUTABLE=$PY39_PATH
+                Python_EXECUTABLE=$PY39_EXE \
+                Python_NumPy_INCLUDE_DIRS=$PY39_NUMPY_INC
 
       - name: Upload wheel
         uses: actions/upload-artifact@v4
