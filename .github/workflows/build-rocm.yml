@@ -14,12 +14,10 @@ jobs:
       - name: Install System Dependencies
         run: |
           apt-get update -y
-          # 1. Install git and pip
-          # 2. Install 'migraphx' (Required because onnxruntime_USE_MIGRAPHX=ON)
-          # 3. Install 'half' (A dependency often needed by MIGraphX/ROCm builds)
-          apt-get install -y git python3-pip migraphx half
-
-          # Install system python deps for the build script
+          # Install git, pip, and MIGraphX (required for --use_migraphx)
+          apt-get install -y git python3-pip migraphx
+          
+          # Install system python deps (for the build script runner)
           /usr/bin/python3 -m pip install packaging flatbuffers
 
       - name: Checkout ONNX Runtime
@@ -30,12 +28,9 @@ jobs:
 
       - name: Patch CMake for Python 3.9
         run: |
-          # The repo requires Python 3.10 in cmake/CMakeLists.txt. 
-          # We use sed to lower this requirement to 3.9 so it accepts our target python.
           echo "Patching CMakeLists.txt to allow Python 3.9..."
+          # Replace explicit 3.10 requirements with 3.9
           grep -rl "find_package(Python 3.10" . | xargs sed -i 's/find_package(Python 3.10/find_package(Python 3.9/g' || true
-          
-          # Also generic fallback if the line is slightly different
           sed -i 's/3\.10/3.9/g' cmake/CMakeLists.txt || true
 
       - name: Setup Python 3.9 (Target)
@@ -48,9 +43,10 @@ jobs:
 
       - name: Install Target Python Dependencies
         run: |
+          # These deps are for the generated wheel and packaging process
           python -m pip install --upgrade pip setuptools wheel cmake ninja numpy==1.26.1 packaging
 
-      - name: Build ONNX Runtime and Wheel
+      - name: Compile ONNX Runtime (C++ Only)
         env:
           ROCM_PATH: /opt/rocm
           HIP_PATH: /opt/rocm/hip
@@ -59,15 +55,17 @@ jobs:
           PY39_EXE=$(which python)
           PY39_NUMPY_INC=$(python -c "import numpy; print(numpy.get_include())")
           
-          echo "Target Python: $PY39_EXE"
-          echo "Target NumPy: $PY39_NUMPY_INC"
+          echo "Compiling with Target Python: $PY39_EXE"
+
+          # 1. Run the build script using System Python (3.10) to handle syntax
+          # 2. REMOVED '--build_wheel' to prevent it from building a cp310 wheel
+          # 3. We keep the CMake flags to ensure the C++ libs link to Py3.9
           
           /usr/bin/python3 tools/ci_build/build.py \
             --build_dir build \
             --config Release \
             --update \
             --build \
-            --build_wheel \
             --parallel $(nproc) \
             --skip_submodule_sync \
             --allow_running_as_root \
@@ -78,6 +76,16 @@ jobs:
                 CMAKE_HIP_ARCHITECTURES=gfx90a,gfx908,gfx1030 \
                 Python_EXECUTABLE=$PY39_EXE \
                 Python_NumPy_INCLUDE_DIRS=$PY39_NUMPY_INC
+
+      - name: Build Wheel (Manual Step for Py3.9)
+        run: |
+          # This runs using the setup-python (Py3.9) environment.
+          # We pass the same flags so setup.py knows how to tag the wheel metadata.
+          
+          python setup.py bdist_wheel \
+            --use_rocm \
+            --use_migraphx \
+            --dist-dir build/Release/dist
 
       - name: Upload wheel
         uses: actions/upload-artifact@v4
