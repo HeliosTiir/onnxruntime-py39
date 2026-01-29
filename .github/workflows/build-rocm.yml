@@ -23,16 +23,15 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
-      # --- NEW: CACHE STEP ---
-      # This saves the 'build' folder. If you re-run this workflow later,
-      # it restores the compiled files so you don't have to compile again.
-      - name: Cache Build Directory
-        id: cache-build
-        uses: actions/cache@v3
+      # 1. Restore Cache
+      # We use a static key 'onnx-rocm-build-v1'. 
+      # As long as you don't change this string, it will try to load this cache.
+      - name: Restore Build Cache
+        id: restore-build
+        uses: actions/cache/restore@v3
         with:
           path: build
-          # Cache key based on commit hash. If commit hasn't changed, we reuse the build.
-          key: onnxruntime-build-${{ github.sha }}
+          key: onnx-rocm-build-v1
 
       - name: Patch CMake for Python 3.9
         run: |
@@ -52,9 +51,9 @@ jobs:
         run: |
           python -m pip install --upgrade pip setuptools wheel cmake ninja numpy==1.26.1 packaging
 
-      # --- COMPILE STEP (SKIPPED IF CACHED) ---
+      # 2. Compile (Only if cache missing)
       - name: Compile ONNX Runtime (C++ Only)
-        if: steps.cache-build.outputs.cache-hit != 'true'
+        if: steps.restore-build.outputs.cache-hit != 'true'
         env:
           ROCM_PATH: /opt/rocm
           HIP_PATH: /opt/rocm/hip
@@ -63,7 +62,6 @@ jobs:
           PY39_EXE=$(which python)
           PY39_NUMPY_INC=$(python -c "import numpy; print(numpy.get_include())")
           
-          # Compile using System Python (3.10) but linking to Target Python (3.9)
           /usr/bin/python3 tools/ci_build/build.py \
             --build_dir build \
             --config Release \
@@ -80,7 +78,15 @@ jobs:
                 Python_EXECUTABLE=$PY39_EXE \
                 Python_NumPy_INCLUDE_DIRS=$PY39_NUMPY_INC
 
-      # --- STAGING & PACKAGING (FIXED README ERROR) ---
+      # 3. FORCE SAVE CACHE
+      # We save right here. If the next step fails, we still have the cache!
+      - name: Save Build Cache
+        if: steps.restore-build.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v3
+        with:
+          path: build
+          key: onnx-rocm-build-v1
+
       - name: Stage Files and Build Wheel
         run: |
           echo "Staging files for wheel build..."
@@ -89,36 +95,35 @@ jobs:
           DEST_PKG="$BUILD_ROOT/onnxruntime"
           DEST_CAPI="$DEST_PKG/capi"
           
-          # 1. Copy Source & Setup
           cp -r onnxruntime "$BUILD_ROOT/"
           cp setup.py "$BUILD_ROOT/"
           
-          # 2. FIX: Smart README handling
-          # setup.py demands README.rst. Most repos have README.md.
+          # Handle README missing error
           if [ -f "README.rst" ]; then
              cp README.rst "$BUILD_ROOT/"
           elif [ -f "README.md" ]; then
-             echo "Converting README.md to README.rst for setup.py"
              cp README.md "$BUILD_ROOT/README.rst"
           else
-             echo "No README found, creating dummy file."
              touch "$BUILD_ROOT/README.rst"
           fi
           
-          # Copy LICENSE if it exists, otherwise ignore
           cp LICENSE "$BUILD_ROOT/" || true
           
-          # 3. Ensure destination exists and copy binaries
           mkdir -p "$DEST_CAPI"
           echo "Copying binaries to $DEST_CAPI..."
           
-          # Copy pybind state (try both locations)
-          find "$BUILD_ROOT" -name "onnxruntime_pybind11_state.so" -exec cp {} "$DEST_CAPI/" \;
+          # Try copying files. We use '|| true' to prevent crash if one specific file is missing,
+          # relying on the final check to validate success.
+          find "$BUILD_ROOT" -name "onnxruntime_pybind11_state.so" -exec cp {} "$DEST_CAPI/" \; || true
+          find "$BUILD_ROOT" -maxdepth 1 -name "*.so*" -exec cp {} "$DEST_CAPI/" \; || true
           
-          # Copy shared libraries
-          find "$BUILD_ROOT" -maxdepth 1 -name "*.so*" -exec cp {} "$DEST_CAPI/" \;
+          # Validation: If the main extension isn't there, fail the build cleanly
+          if [ ! -f "$DEST_CAPI/onnxruntime_pybind11_state.so" ]; then
+             echo "ERROR: onnxruntime_pybind11_state.so NOT FOUND in $DEST_CAPI"
+             ls -R "$BUILD_ROOT"
+             exit 1
+          fi
           
-          # 4. Build Wheel
           cd "$BUILD_ROOT"
           echo "Building Wheel for Python 3.9..."
           python setup.py bdist_wheel \
