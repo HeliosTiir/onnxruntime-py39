@@ -31,7 +31,7 @@ jobs:
       
       - name: Build ONNX Runtime
         run: |
-          cd $GITHUB_WORKSPACE
+          cd $GITHUB_WORKSPACE/onnxruntime-py39   # go to repo root
           mkdir -p build
           cd build
           cmake .. \
@@ -42,6 +42,7 @@ jobs:
             -Donnxruntime_BUILD_SHARED_LIB=ON \
             -DCMAKE_BUILD_TYPE=Release
           make -j$(nproc)
+
 
 
 
