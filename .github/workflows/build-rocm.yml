@@ -1,0 +1,61 @@
+name: Build ONNX Runtime ROCm 7.1 for Python 3.9
+
+# Trigger manually
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    container:
+      image: rocm/rocm-dev:7.1.1  # ROCm dev container
+    steps:
+      # 1️⃣ Checkout the repo
+      - name: Checkout ONNX Runtime
+        uses: actions/checkout@v3
+
+      # 2️⃣ Setup Python 3.9
+      - name: Setup Python 3.9
+        uses: actions/setup-python@v4
+        with:
+          python-version: 3.9
+
+      # 3️⃣ Upgrade pip and install build deps
+      - name: Install Python build dependencies
+        run: |
+          python -m pip install --upgrade pip setuptools wheel cmake ninja numpy==1.26.1
+
+      # 4️⃣ Configure ROCm environment
+      - name: Setup ROCm environment
+        run: |
+          export ROCM_PATH=/opt/rocm
+          export HIP_PATH=$ROCM_PATH/hip
+          export PATH=$ROCM_PATH/bin:$PATH
+          export LD_LIBRARY_PATH=$ROCM_PATH/lib:$ROCM_PATH/lib64:$LD_LIBRARY_PATH
+          export HSA_OVERRIDE_GFX_VERSION=10.3.0
+
+      # 5️⃣ Build ONNX Runtime with ROCm and MIGraphX
+      - name: Build ONNX Runtime
+        run: |
+          mkdir -p build && cd build
+          cmake ../ \
+            -Donnxruntime_ENABLE_PYTHON=ON \
+            -DPYTHON_EXECUTABLE=$(which python) \
+            -Donnxruntime_USE_ROCM=ON \
+            -Donnxruntime_USE_MIGRAPHX=ON \
+            -Donnxruntime_BUILD_SHARED_LIB=ON \
+            -DCMAKE_BUILD_TYPE=Release
+          make -j$(nproc)
+
+      # 6️⃣ Build the Python wheel
+      - name: Build Python wheel
+        run: |
+          cd ..
+          python setup.py bdist_wheel
+
+      # 7️⃣ Upload wheel artifact
+      - name: Upload wheel
+        uses: actions/upload-artifact@v3
+        with:
+          name: onnxruntime-rocm-wheel
+          path: dist/*.whl
