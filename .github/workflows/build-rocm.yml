@@ -23,13 +23,13 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
-      # RESTORE CACHE (Updated to v2 to invalidate previous partial build)
+      # RESTORE CACHE (v3 key to force fresh build with python enabled)
       - name: Restore Build Cache
         id: restore-build
         uses: actions/cache/restore@v3
         with:
           path: build
-          key: onnx-rocm-build-v2
+          key: onnx-rocm-build-v3
 
       - name: Patch CMake for Python 3.9
         run: |
@@ -60,17 +60,20 @@ jobs:
           PY39_EXE=$(which python)
           PY39_NUMPY_INC=$(python -c "import numpy; print(numpy.get_include())")
           
-          # FIX: Added --enable_python so it actually builds the .so binding
+          # FIX: 
+          # 1. Removed --enable_python (script didn't like it)
+          # 2. Added onnxruntime_ENABLE_PYTHON=ON to cmake_extra_defines
+          
           /usr/bin/python3 tools/ci_build/build.py \
             --build_dir build \
             --config Release \
             --update \
             --build \
-            --enable_python \
             --parallel $(nproc) \
             --skip_submodule_sync \
             --allow_running_as_root \
             --cmake_extra_defines \
+                onnxruntime_ENABLE_PYTHON=ON \
                 onnxruntime_USE_ROCM=ON \
                 onnxruntime_ROCM_HOME=/opt/rocm \
                 onnxruntime_USE_MIGRAPHX=ON \
@@ -78,13 +81,13 @@ jobs:
                 Python_EXECUTABLE=$PY39_EXE \
                 Python_NumPy_INCLUDE_DIRS=$PY39_NUMPY_INC
 
-      # SAVE CACHE (v2)
+      # SAVE CACHE (v3)
       - name: Save Build Cache
         if: steps.restore-build.outputs.cache-hit != 'true'
         uses: actions/cache/save@v3
         with:
           path: build
-          key: onnx-rocm-build-v2
+          key: onnx-rocm-build-v3
 
       - name: Stage Files and Build Wheel
         run: |
