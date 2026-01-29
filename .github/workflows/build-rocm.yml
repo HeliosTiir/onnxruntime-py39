@@ -28,11 +28,13 @@ jobs:
           export PATH=$ROCM_PATH/bin:$PATH
           export LD_LIBRARY_PATH=$ROCM_PATH/lib:$ROCM_PATH/lib64:$LD_LIBRARY_PATH
           export HSA_OVERRIDE_GFX_VERSION=10.3.0
+      
       - name: Build ONNX Runtime
         run: |
+          cd $GITHUB_WORKSPACE
           mkdir -p build
           cd build
-          cmake "${GITHUB_WORKSPACE}" \
+          cmake .. \
             -Donnxruntime_ENABLE_PYTHON=ON \
             -DPYTHON_EXECUTABLE=$(which python) \
             -Donnxruntime_USE_ROCM=ON \
@@ -40,6 +42,7 @@ jobs:
             -Donnxruntime_BUILD_SHARED_LIB=ON \
             -DCMAKE_BUILD_TYPE=Release
           make -j$(nproc)
+
 
 
       - name: Build Python wheel
