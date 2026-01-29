@@ -11,13 +11,15 @@ jobs:
       options: --user root
 
     steps:
-      - name: Install Git and System Python Deps
+      - name: Install System Dependencies
         run: |
           apt-get update -y
-          apt-get install -y git python3-pip
-          
-          # Install deps for the SYSTEM python (3.10) which runs the build script
-          # We need 'packaging' and 'flatbuffers' here so build.py doesn't crash
+          # 1. Install git and pip
+          # 2. Install 'migraphx' (Required because onnxruntime_USE_MIGRAPHX=ON)
+          # 3. Install 'half' (A dependency often needed by MIGraphX/ROCm builds)
+          apt-get install -y git python3-pip migraphx half
+
+          # Install system python deps for the build script
           /usr/bin/python3 -m pip install packaging flatbuffers
 
       - name: Checkout ONNX Runtime
@@ -25,6 +27,16 @@ jobs:
         with:
           submodules: recursive
           fetch-depth: 0
+
+      - name: Patch CMake for Python 3.9
+        run: |
+          # The repo requires Python 3.10 in cmake/CMakeLists.txt. 
+          # We use sed to lower this requirement to 3.9 so it accepts our target python.
+          echo "Patching CMakeLists.txt to allow Python 3.9..."
+          grep -rl "find_package(Python 3.10" . | xargs sed -i 's/find_package(Python 3.10/find_package(Python 3.9/g' || true
+          
+          # Also generic fallback if the line is slightly different
+          sed -i 's/3\.10/3.9/g' cmake/CMakeLists.txt || true
 
       - name: Setup Python 3.9 (Target)
         uses: actions/setup-python@v4
@@ -36,8 +48,6 @@ jobs:
 
       - name: Install Target Python Dependencies
         run: |
-          # Install dependencies for the TARGET Python (3.9)
-          # We need numpy here so we can link against it
           python -m pip install --upgrade pip setuptools wheel cmake ninja numpy==1.26.1 packaging
 
       - name: Build ONNX Runtime and Wheel
@@ -46,18 +56,11 @@ jobs:
           HIP_PATH: /opt/rocm/hip
           HSA_OVERRIDE_GFX_VERSION: 10.3.0
         run: |
-          # 1. Capture Target Python Paths
           PY39_EXE=$(which python)
-          
-          # Calculate exact numpy include path for Python 3.9
           PY39_NUMPY_INC=$(python -c "import numpy; print(numpy.get_include())")
           
           echo "Target Python: $PY39_EXE"
           echo "Target NumPy: $PY39_NUMPY_INC"
-
-          # 2. Run Build Script
-          # We use System Python (3.10) to run the script (to support new syntax)
-          # But we pass CMake flags to FORCE it to link against Python 3.9
           
           /usr/bin/python3 tools/ci_build/build.py \
             --build_dir build \
