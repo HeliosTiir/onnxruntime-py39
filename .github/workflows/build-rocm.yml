@@ -8,15 +8,21 @@ jobs:
     runs-on: ubuntu-22.04
     container:
       image: rocm/dev-ubuntu-22.04:7.1.1
-      # Docker often runs as a specific user, ensure we have root for installing pip pkgs
-      options: --user root 
+      # Ensure we run as root to install git and pip packages
+      options: --user root
 
     steps:
+      # --- FIX STARTS HERE ---
+      - name: Install Git
+        run: |
+          apt-get update -y
+          apt-get install -y git
+      # --- FIX ENDS HERE ---
+
       - name: Checkout ONNX Runtime
         uses: actions/checkout@v3
         with:
-          # CRITICAL: ONNX Runtime dependencies live in submodules
-          submodules: recursive 
+          submodules: recursive
           fetch-depth: 0
 
       - name: Setup Python 3.9
@@ -25,11 +31,11 @@ jobs:
           python-version: 3.9
 
       - name: Trust Git Directory
+        # Required because the container user might differ from the volume owner
         run: git config --global --add safe.directory $GITHUB_WORKSPACE
 
       - name: Install Python build dependencies
         run: |
-          # 'packaging' and 'wheel' are required for the build script
           python -m pip install --upgrade pip setuptools wheel cmake ninja numpy==1.26.1 packaging
 
       - name: Build ONNX Runtime and Wheel
@@ -38,10 +44,7 @@ jobs:
           HIP_PATH: /opt/rocm/hip
           HSA_OVERRIDE_GFX_VERSION: 10.3.0
         run: |
-          # We use the official python build script (tools/ci_build/build.py).
-          # This replaces manual CMake commands and ensures the wheel is built 
-          # with the correct version headers and dependencies.
-          
+          # Use the official build script to ensure all flags and versioning are correct
           python tools/ci_build/build.py \
             --config Release \
             --build_dir build \
@@ -57,5 +60,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: onnxruntime-rocm-wheel
-          # The build.py script outputs wheels to build/Release/dist
           path: build/Release/dist/*.whl
