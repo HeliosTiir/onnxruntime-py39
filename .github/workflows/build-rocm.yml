@@ -8,16 +8,17 @@ jobs:
     runs-on: ubuntu-22.04
     container:
       image: rocm/dev-ubuntu-22.04:7.1.1
-      # Ensure we run as root to install git and pip packages
       options: --user root
 
     steps:
-      # --- FIX STARTS HERE ---
-      - name: Install Git
+      - name: Install Git and System Python Deps
         run: |
           apt-get update -y
-          apt-get install -y git
-      # --- FIX ENDS HERE ---
+          apt-get install -y git python3-pip
+          
+          # Install 'packaging' and 'flatbuffers' for the SYSTEM python (3.10)
+          # The build script itself runs on this, so it needs these libs.
+          /usr/bin/python3 -m pip install packaging flatbuffers
 
       - name: Checkout ONNX Runtime
         uses: actions/checkout@v3
@@ -25,17 +26,18 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
-      - name: Setup Python 3.9
+      - name: Setup Python 3.9 (Target)
         uses: actions/setup-python@v4
         with:
           python-version: 3.9
 
       - name: Trust Git Directory
-        # Required because the container user might differ from the volume owner
         run: git config --global --add safe.directory $GITHUB_WORKSPACE
 
-      - name: Install Python build dependencies
+      - name: Install Target Python Dependencies
         run: |
+          # Install dependencies for the TARGET Python (3.9)
+          # This is what gets linked into the wheel.
           python -m pip install --upgrade pip setuptools wheel cmake ninja numpy==1.26.1 packaging
 
       - name: Build ONNX Runtime and Wheel
@@ -44,8 +46,16 @@ jobs:
           HIP_PATH: /opt/rocm/hip
           HSA_OVERRIDE_GFX_VERSION: 10.3.0
         run: |
-          # Use the official build script to ensure all flags and versioning are correct
-          python tools/ci_build/build.py \
+          # CAPTURE THE PATH TO PYTHON 3.9
+          PY39_PATH=$(which python)
+          echo "Building using script runner: /usr/bin/python3"
+          echo "Building for target python: $PY39_PATH"
+
+          # EXPLANATION:
+          # 1. We execute build.py using /usr/bin/python3 (System Python 3.10) to support 'match' syntax.
+          # 2. We pass --python_path $PY39_PATH to tell the script to compile the wheel for Python 3.9.
+
+          /usr/bin/python3 tools/ci_build/build.py \
             --config Release \
             --build_dir build \
             --skip_submodule_sync \
@@ -54,6 +64,7 @@ jobs:
             --use_rocm \
             --rocm_home /opt/rocm \
             --use_migraphx \
+            --python_path $PY39_PATH \
             --cmake_extra_defines CMAKE_HIP_ARCHITECTURES=gfx90a,gfx908,gfx1030
 
       - name: Upload wheel
