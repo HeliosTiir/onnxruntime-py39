@@ -16,8 +16,7 @@ jobs:
           apt-get update -y
           apt-get install -y git python3-pip
           
-          # Install 'packaging' and 'flatbuffers' for the SYSTEM python (3.10)
-          # The build script itself runs on this, so it needs these libs.
+          # Install deps for the SYSTEM python (3.10) which runs the build script
           /usr/bin/python3 -m pip install packaging flatbuffers
 
       - name: Checkout ONNX Runtime
@@ -37,7 +36,6 @@ jobs:
       - name: Install Target Python Dependencies
         run: |
           # Install dependencies for the TARGET Python (3.9)
-          # This is what gets linked into the wheel.
           python -m pip install --upgrade pip setuptools wheel cmake ninja numpy==1.26.1 packaging
 
       - name: Build ONNX Runtime and Wheel
@@ -46,26 +44,27 @@ jobs:
           HIP_PATH: /opt/rocm/hip
           HSA_OVERRIDE_GFX_VERSION: 10.3.0
         run: |
-          # CAPTURE THE PATH TO PYTHON 3.9
           PY39_PATH=$(which python)
-          echo "Building using script runner: /usr/bin/python3"
-          echo "Building for target python: $PY39_PATH"
+          echo "Targeting Python: $PY39_PATH"
 
-          # EXPLANATION:
-          # 1. We execute build.py using /usr/bin/python3 (System Python 3.10) to support 'match' syntax.
-          # 2. We pass --python_path $PY39_PATH to tell the script to compile the wheel for Python 3.9.
-
+          # 1. Added --update --build (Crucial for enabling build flags)
+          # 2. Added value to --parallel $(nproc) to prevent arg parsing errors
+          # 3. Moved python path to CMAKE_EXTRA_DEFINES to be safe
+          
           /usr/bin/python3 tools/ci_build/build.py \
-            --config Release \
             --build_dir build \
-            --skip_submodule_sync \
+            --config Release \
+            --update \
+            --build \
             --build_wheel \
-            --parallel \
+            --parallel $(nproc) \
+            --skip_submodule_sync \
             --use_rocm \
             --rocm_home /opt/rocm \
             --use_migraphx \
-            --python_path $PY39_PATH \
-            --cmake_extra_defines CMAKE_HIP_ARCHITECTURES=gfx90a,gfx908,gfx1030
+            --cmake_extra_defines \
+                CMAKE_HIP_ARCHITECTURES=gfx90a,gfx908,gfx1030 \
+                PYTHON_EXECUTABLE=$PY39_PATH
 
       - name: Upload wheel
         uses: actions/upload-artifact@v4
