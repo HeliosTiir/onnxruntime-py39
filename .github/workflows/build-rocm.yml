@@ -7,7 +7,7 @@ jobs:
   build:
     runs-on: ubuntu-22.04
     container:
-      image: rocm/rocm-dev:7.1.0
+      image: rocm/dev-ubuntu-22.04:7.1.1-complete
     steps:
       - name: Checkout ONNX Runtime
         uses: actions/checkout@v3
