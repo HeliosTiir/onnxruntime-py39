@@ -85,71 +85,67 @@ jobs:
           path: build
           key: onnx-rocm-build-v3
 
-      - name: Prepare Clean Wheel Stage
+      - name: Package and Build Wheel
         run: |
-          echo "Creating a clean staging area for wheel generation..."
-          
-          # Definitions
+          # 1. Setup Directories
           BUILD_ROOT="build/Release"
           STAGE_DIR="build/wheel_stage"
           STAGE_PKG="$STAGE_DIR/onnxruntime"
           STAGE_CAPI="$STAGE_PKG/capi"
           
-          # 1. Clean and Create Stage
+          echo "Creating staging directory: $STAGE_DIR"
           rm -rf "$STAGE_DIR"
           mkdir -p "$STAGE_DIR"
           
-          # 2. Copy Python Source Code from Repo Root -> Stage
-          echo "Copying source code..."
+          # 2. Copy Source Code and Setup Script
+          echo "Copying source code and setup.py..."
           cp -r onnxruntime "$STAGE_DIR/"
           cp setup.py "$STAGE_DIR/"
-          cp LICENSE* "$STAGE_DIR/" || true
           
-          # 3. Fix README (Convert/Rename if needed)
+          # 3. Copy Critical Metadata (Fixes FileNotFoundError)
+          echo "Copying metadata (VERSION, LICENSE, README)..."
+          cp VERSION_NUMBER "$STAGE_DIR/" || echo "VERSION_NUMBER not found (skipping)"
+          cp LICENSE "$STAGE_DIR/" || echo "LICENSE not found (skipping)"
+          
+          # Robust README handling: Convert .md to .rst if needed
           if [ -f "README.rst" ]; then
              cp README.rst "$STAGE_DIR/"
           elif [ -f "README.md" ]; then
-             echo "Renaming README.md to README.rst"
+             echo "Converting README.md to README.rst..."
              cp README.md "$STAGE_DIR/README.rst"
           else
-             echo "Creating dummy README.rst"
-             echo "ONNX Runtime" > "$STAGE_DIR/README.rst"
+             echo "WARNING: No README found. Creating dummy file."
+             echo "ONNX Runtime ROCm" > "$STAGE_DIR/README.rst"
           fi
           
-          # 4. Copy Compiled Binaries from Build -> Stage CAPI
-          echo "Copying compiled binaries..."
+          # 4. Copy Compiled Binaries to CAPI
+          echo "Copying compiled binaries from $BUILD_ROOT..."
           mkdir -p "$STAGE_CAPI"
           
-          # Find and copy binaries (ignoring errors if files overlap)
+          # Find and copy the Python extension and shared libs
           find "$BUILD_ROOT" -name "*onnxruntime_pybind11_state*.so" -exec cp -v {} "$STAGE_CAPI/" \;
           find "$BUILD_ROOT" -maxdepth 1 -name "*.so*" -exec cp -v {} "$STAGE_CAPI/" \;
           
-          # 5. Debug Verification
+          # 5. Verify Staging
           echo "=== Verifying Stage Content ==="
-          ls -R "$STAGE_DIR" | head -n 20 # Show top level structure
+          ls -la "$STAGE_DIR"
           
-          # Critical Check: Ensure backend exists (Debugging previous error)
-          if [ ! -d "$STAGE_PKG/backend" ]; then
-             echo "WARNING: onnxruntime/backend directory is missing in stage!"
-             echo "Checking source root..."
-             ls -d onnxruntime/backend || echo "Backend missing in source root too!"
-          fi
-          
-          # Critical Check: Ensure binaries exist
-          if [ -z "$(ls $STAGE_CAPI/*onnxruntime_pybind11_state*.so 2>/dev/null)" ]; then
-             echo "CRITICAL ERROR: Extension module not found in $STAGE_CAPI"
+          # Ensure README exists in stage
+          if [ ! -f "$STAGE_DIR/README.rst" ]; then
+             echo "CRITICAL ERROR: README.rst is missing in $STAGE_DIR"
              exit 1
           fi
-
-          echo "Staging Complete. Ready to build wheel."
-
-      - name: Build Wheel
-        run: |
-          # Go to the clean stage directory
-          cd build/wheel_stage
           
+          # Ensure Binary exists in stage
+          if [ -z "$(ls $STAGE_CAPI/*onnxruntime_pybind11_state*.so 2>/dev/null)" ]; then
+             echo "CRITICAL ERROR: Extension module (.so) missing in $STAGE_CAPI"
+             exit 1
+          fi
+          
+          # 6. Build Wheel
           echo "Building Wheel..."
-          # FIX: Pass custom flags BEFORE the command 'bdist_wheel'
+          cd "$STAGE_DIR"
+          # Flags passed BEFORE bdist_wheel
           python setup.py --use_rocm --use_migraphx bdist_wheel --dist-dir ../../dist
 
       - name: Upload wheel
