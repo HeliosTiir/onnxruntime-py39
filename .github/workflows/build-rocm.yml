@@ -116,8 +116,9 @@ jobs:
           fi
 
           echo "Building Wheel for Python 3.9..."
-          # FIX: flags passed BEFORE the command
-          python setup.py --use_rocm --use_migraphx bdist_wheel --dist-dir dist
+          # FIX: Removed '--use_rocm' and '--use_migraphx' flags.
+          # The binaries are already staged, so the wheel will contain them automatically.
+          python setup.py bdist_wheel --dist-dir dist
 
       - name: Upload wheel
         uses: actions/upload-artifact@v4
