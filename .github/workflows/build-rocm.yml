@@ -23,13 +23,13 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
-      # RESTORE CACHE (v3)
+      # RESTORE CACHE (Updated to v4 to FORCE REBUILD with new security flags)
       - name: Restore Build Cache
         id: restore-build
         uses: actions/cache/restore@v3
         with:
           path: build
-          key: onnx-rocm-build-v3
+          key: onnx-rocm-build-v4
 
       - name: Patch CMake and Setup for Python 3.9
         run: |
@@ -38,9 +38,8 @@ jobs:
           sed -i 's/3\.10/3.9/g' cmake/CMakeLists.txt || true
           
           echo "Patching setup.py metadata..."
-          # Fix the "requires python >= 3.10" metadata error
+          # Fix the "requires python >= 3.10" error permanently
           sed -i 's/python_requires=">=3.10"/python_requires=">=3.9"/g' setup.py || true
-          # Fallback generic replacement if format differs
           sed -i 's/>=3.10/>=3.9/g' setup.py || true
 
       - name: Setup Python 3.9 (Target)
@@ -55,7 +54,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip setuptools wheel cmake ninja numpy==1.26.1 packaging
 
-      # COMPILE (Skipped if cache hits)
+      # COMPILE (Re-runs because cache key changed to v4)
       - name: Compile ONNX Runtime (C++ Only)
         if: steps.restore-build.outputs.cache-hit != 'true'
         env:
@@ -66,6 +65,7 @@ jobs:
           PY39_EXE=$(which python)
           PY39_NUMPY_INC=$(python -c "import numpy; print(numpy.get_include())")
           
+          # Added Linker Flags to fix "cannot enable executable stack" error
           /usr/bin/python3 tools/ci_build/build.py \
             --build_dir build \
             --config Release \
@@ -81,15 +81,17 @@ jobs:
                 onnxruntime_USE_MIGRAPHX=ON \
                 CMAKE_HIP_ARCHITECTURES=gfx90a,gfx908,gfx1030 \
                 Python_EXECUTABLE=$PY39_EXE \
-                Python_NumPy_INCLUDE_DIRS=$PY39_NUMPY_INC
+                Python_NumPy_INCLUDE_DIRS=$PY39_NUMPY_INC \
+                CMAKE_SHARED_LINKER_FLAGS=-Wl,-z,noexecstack \
+                CMAKE_MODULE_LINKER_FLAGS=-Wl,-z,noexecstack
 
-      # SAVE CACHE
+      # SAVE CACHE (v4)
       - name: Save Build Cache
         if: steps.restore-build.outputs.cache-hit != 'true'
         uses: actions/cache/save@v3
         with:
           path: build
-          key: onnx-rocm-build-v3
+          key: onnx-rocm-build-v4
 
       - name: Prepare Workspace and Build Wheel
         env:
