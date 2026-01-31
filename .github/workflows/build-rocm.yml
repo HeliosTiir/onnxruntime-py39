@@ -85,41 +85,53 @@ jobs:
           path: build
           key: onnx-rocm-build-v3
 
-      - name: Prepare and Build Wheel (In-Source)
+      - name: Package and Build Wheel
         env:
-          # Using ENV VARS instead of CLI flags to avoid 'option not recognized' error
+          # Use Env Vars to configure setup.py (Bypasses "option not recognized" error)
           ONNXRUNTIME_USE_ROCM: 1
           ONNXRUNTIME_USE_MIGRAPHX: 1
           ONNXRUNTIME_ROCM_VERSION: 7.1
         run: |
-          echo "Injecting binaries into source tree..."
-          
+          # The valid python package structure is generated here by the build system
           BUILD_ROOT="build/Release"
-          DEST_CAPI="onnxruntime/capi"
           
-          # 1. Ensure CAPI dir exists
+          echo "Preparing build artifacts in $BUILD_ROOT..."
+          
+          # 1. Inject required metadata into the build folder
+          cp setup.py "$BUILD_ROOT/"
+          cp VERSION_NUMBER "$BUILD_ROOT/" || true
+          cp LICENSE "$BUILD_ROOT/" || true
+          
+          # 2. Robust README handling
+          if [ -f "README.rst" ]; then
+             cp README.rst "$BUILD_ROOT/"
+          elif [ -f "README.md" ]; then
+             echo "Converting README.md to README.rst"
+             cp README.md "$BUILD_ROOT/README.rst"
+          else
+             echo "Creating dummy README.rst"
+             echo "ONNX Runtime" > "$BUILD_ROOT/README.rst"
+          fi
+          
+          # 3. Ensure Binaries are in the correct place
+          # CMake usually puts them in build/Release, but setup.py expects them in build/Release/onnxruntime/capi
+          DEST_CAPI="$BUILD_ROOT/onnxruntime/capi"
           mkdir -p "$DEST_CAPI"
           
-          # 2. Copy binaries (Shared Libs + Python Extension)
-          find "$BUILD_ROOT" -name "*onnxruntime_pybind11_state*.so" -exec cp -v {} "$DEST_CAPI/" \;
+          echo "Moving compiled binaries to $DEST_CAPI..."
+          # Copy from build root to capi dir (careful not to copy file onto itself)
+          find "$BUILD_ROOT" -maxdepth 1 -name "*onnxruntime_pybind11_state*.so" -exec cp -v {} "$DEST_CAPI/" \;
           find "$BUILD_ROOT" -maxdepth 1 -name "*.so*" -exec cp -v {} "$DEST_CAPI/" \;
           
-          # 3. Validation
-          if [ -z "$(ls $DEST_CAPI/*onnxruntime_pybind11_state*.so 2>/dev/null)" ]; then
-             echo "CRITICAL ERROR: Extension module missing in $DEST_CAPI"
+          # 4. Verify Structure
+          if [ ! -d "$BUILD_ROOT/onnxruntime/backend" ]; then
+             echo "CRITICAL: 'backend' directory missing in $BUILD_ROOT/onnxruntime"
+             echo "It seems the build system didn't populate the python package structure?"
              exit 1
-          fi
-
-          # 4. Handle README (In-Source)
-          if [ ! -f "README.rst" ]; then
-             if [ -f "README.md" ]; then
-                cp README.md README.rst
-             else
-                echo "ONNX Runtime" > README.rst
-             fi
           fi
           
           # 5. Build Wheel
+          cd "$BUILD_ROOT"
           echo "Building Wheel..."
           python setup.py bdist_wheel --dist-dir dist
 
@@ -127,4 +139,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: onnxruntime-rocm-wheel
-          path: dist/*.whl
+          path: build/Release/dist/*.whl
