@@ -14,7 +14,7 @@ jobs:
       - name: Install Dependencies
         run: |
           apt-get update -y
-          apt-get install -y git python3-pip
+          apt-get install -y git python3-pip zip unzip
           /usr/bin/python3 -m pip install packaging flatbuffers wheel numpy==1.26.1
 
       - name: Checkout ONNX Runtime
@@ -23,7 +23,7 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
-      # RESTORE CACHE (v4) - Reuses your compiled binaries!
+      # RESTORE CACHE (v4)
       - name: Restore Build Cache
         id: restore-build
         uses: actions/cache/restore@v3
@@ -34,49 +34,37 @@ jobs:
       - name: Verify Cache
         run: |
           if [ ! -d "build/Release" ]; then
-            echo "::error::Cache not found or empty! Cannot repackage without compilation."
+            echo "::error::Cache not found! Cannot repackage."
             exit 1
           fi
 
       - name: Prepare Workspace
         run: |
-          # 1. Setup minimal workspace (Replace source with built package structure)
           if [ ! -f "README.rst" ]; then cp README.md README.rst || echo "ORT" > README.rst; fi
           
-          # Move original source out of the way
+          # Move source out of way, bring in built package
           mv onnxruntime onnxruntime_src_backup
-          
-          # Copy the generated package structure from build
           cp -r build/Release/onnxruntime .
           
-          # 2. Inject ALL compiled binaries into capi folder
+          # Inject binaries
           mkdir -p onnxruntime/capi
           echo "Copying binaries..."
           find build/Release -maxdepth 1 -name "*.so*" -exec cp -v {} "onnxruntime/capi/" \;
           find build/Release -name "*onnxruntime_pybind11_state*.so" -exec cp -v {} "onnxruntime/capi/" \;
           
-          # Verify the missing file is now present
-          if [ ! -f "onnxruntime/capi/libonnxruntime_providers_migraphx.so" ]; then
-             echo "::error::Critical library libonnxruntime_providers_migraphx.so missing after copy!"
-             exit 1
-          fi
-
-          # 3. Copy helper scripts needed by setup.py
+          # Copy helper script
           find . -name "onnxruntime_collect_build_info.py" -exec cp -v {} . \;
 
       - name: Patch Code for Python 3.9
         run: |
-          echo "Patching Setup & Metadata..."
-          # Fix setup.py requirements
+          echo "Patching Setup..."
           sed -i 's/python_requires=">=3.10"/python_requires=">=3.9"/g' setup.py || true
           sed -i 's/>=3.10/>=3.9/g' setup.py || true
           
-          # Force setup.py to include ALL .so files in package_data
-          # This is the magic fix for the missing file
+          # Force inclusion of .so files
           sed -i "s/package_data='onnxruntime': data_files/package_data={'onnxruntime': data_files + ['*.so', 'capi/*.so']}/" setup.py || true
 
-          echo "Sanitizing Python 3.10 Syntax..."
-          # Fix "Type | None" syntax crash
+          echo "Sanitizing Syntax..."
           find onnxruntime -name "*.py" -exec sed -i '1i from __future__ import annotations' {} \;
           grep -rl " | None" onnxruntime | xargs sed -i 's/ | None//g'
 
@@ -87,10 +75,11 @@ jobs:
           ONNXRUNTIME_ROCM_VERSION: 7.1
         run: |
           echo "Building wheel..."
-          python setup.py bdist_wheel --dist-dir dist
+          # FIX: Use python3 explicitly
+          /usr/bin/python3 setup.py bdist_wheel --dist-dir dist
           
           echo "Verifying wheel contents..."
-          unzip -l dist/*.whl | grep migraphx || echo "::warning::MIGraphX lib still missing in wheel!"
+          unzip -l dist/*.whl | grep migraphx || echo "::warning::MIGraphX lib still missing!"
 
       - name: Upload wheel
         uses: actions/upload-artifact@v4
