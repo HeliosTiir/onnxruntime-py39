@@ -85,40 +85,72 @@ jobs:
           path: build
           key: onnx-rocm-build-v3
 
-      - name: Check/Create README.rst
+      - name: Prepare Clean Wheel Stage
         run: |
-          if [ ! -f "README.rst" ]; then
-             if [ -f "README.md" ]; then
-                cp README.md README.rst
-             else
-                echo "ONNX Runtime" > README.rst
-             fi
-          fi
-
-      - name: Populate CAPI and Build Wheel
-        run: |
-          echo "Copying compiled binaries to source tree..."
+          echo "Creating a clean staging area for wheel generation..."
           
+          # Definitions
           BUILD_ROOT="build/Release"
-          DEST_CAPI="onnxruntime/capi"
+          STAGE_DIR="build/wheel_stage"
+          STAGE_PKG="$STAGE_DIR/onnxruntime"
+          STAGE_CAPI="$STAGE_PKG/capi"
           
-          mkdir -p "$DEST_CAPI"
+          # 1. Clean and Create Stage
+          rm -rf "$STAGE_DIR"
+          mkdir -p "$STAGE_DIR"
           
-          # Copy binaries from build folder to source tree
-          find "$BUILD_ROOT" -name "*onnxruntime_pybind11_state*.so" -exec cp -v {} "$DEST_CAPI/" \;
-          find "$BUILD_ROOT" -maxdepth 1 -name "*.so*" -exec cp -v {} "$DEST_CAPI/" \;
+          # 2. Copy Python Source Code from Repo Root -> Stage
+          echo "Copying source code..."
+          cp -r onnxruntime "$STAGE_DIR/"
+          cp setup.py "$STAGE_DIR/"
+          cp LICENSE* "$STAGE_DIR/" || true
           
-          # Verify Copy
-          if [ -z "$(ls $DEST_CAPI/*onnxruntime_pybind11_state*.so 2>/dev/null)" ]; then
-             echo "CRITICAL ERROR: Extension module not found in $DEST_CAPI"
-             ls -la "$BUILD_ROOT"
+          # 3. Fix README (Convert/Rename if needed)
+          if [ -f "README.rst" ]; then
+             cp README.rst "$STAGE_DIR/"
+          elif [ -f "README.md" ]; then
+             echo "Renaming README.md to README.rst"
+             cp README.md "$STAGE_DIR/README.rst"
+          else
+             echo "Creating dummy README.rst"
+             echo "ONNX Runtime" > "$STAGE_DIR/README.rst"
+          fi
+          
+          # 4. Copy Compiled Binaries from Build -> Stage CAPI
+          echo "Copying compiled binaries..."
+          mkdir -p "$STAGE_CAPI"
+          
+          # Find and copy binaries (ignoring errors if files overlap)
+          find "$BUILD_ROOT" -name "*onnxruntime_pybind11_state*.so" -exec cp -v {} "$STAGE_CAPI/" \;
+          find "$BUILD_ROOT" -maxdepth 1 -name "*.so*" -exec cp -v {} "$STAGE_CAPI/" \;
+          
+          # 5. Debug Verification
+          echo "=== Verifying Stage Content ==="
+          ls -R "$STAGE_DIR" | head -n 20 # Show top level structure
+          
+          # Critical Check: Ensure backend exists (Debugging previous error)
+          if [ ! -d "$STAGE_PKG/backend" ]; then
+             echo "WARNING: onnxruntime/backend directory is missing in stage!"
+             echo "Checking source root..."
+             ls -d onnxruntime/backend || echo "Backend missing in source root too!"
+          fi
+          
+          # Critical Check: Ensure binaries exist
+          if [ -z "$(ls $STAGE_CAPI/*onnxruntime_pybind11_state*.so 2>/dev/null)" ]; then
+             echo "CRITICAL ERROR: Extension module not found in $STAGE_CAPI"
              exit 1
           fi
 
-          echo "Building Wheel for Python 3.9..."
-          # FIX: Removed '--use_rocm' and '--use_migraphx' flags.
-          # The binaries are already staged, so the wheel will contain them automatically.
-          python setup.py bdist_wheel --dist-dir dist
+          echo "Staging Complete. Ready to build wheel."
+
+      - name: Build Wheel
+        run: |
+          # Go to the clean stage directory
+          cd build/wheel_stage
+          
+          echo "Building Wheel..."
+          # FIX: Pass custom flags BEFORE the command 'bdist_wheel'
+          python setup.py --use_rocm --use_migraphx bdist_wheel --dist-dir ../../dist
 
       - name: Upload wheel
         uses: actions/upload-artifact@v4
