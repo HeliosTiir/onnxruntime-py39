@@ -49,7 +49,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip setuptools wheel cmake ninja numpy==1.26.1 packaging
 
-      # COMPILE (Only if cache missing)
+      # COMPILE (Skipped if cache hits)
       - name: Compile ONNX Runtime (C++ Only)
         if: steps.restore-build.outputs.cache-hit != 'true'
         env:
@@ -85,61 +85,49 @@ jobs:
           path: build
           key: onnx-rocm-build-v3
 
-      - name: Stage Files and Build Wheel
+      - name: Check/Create README.rst
         run: |
-          echo "Staging files for wheel build..."
-          
-          BUILD_ROOT="build/Release"
-          DEST_PKG="$BUILD_ROOT/onnxruntime"
-          DEST_CAPI="$DEST_PKG/capi"
-          
-          # 1. Copy Source & Setup
-          cp -r onnxruntime "$BUILD_ROOT/"
-          cp setup.py "$BUILD_ROOT/"
-          
-          # 2. ROBUST README HANDLING
-          # Copy whatever we find, then FORCE ensure README.rst exists.
-          cp README* "$BUILD_ROOT/" || true
-          cp LICENSE* "$BUILD_ROOT/" || true
-          
-          # Go to build root to normalize paths
-          cd "$BUILD_ROOT"
-          
-          # If README.rst is missing but .md exists, rename it.
+          # setup.py requires README.rst. If only README.md exists, copy it.
           if [ ! -f "README.rst" ]; then
              if [ -f "README.md" ]; then
-                echo "Renaming README.md to README.rst"
-                mv README.md README.rst
+                cp README.md README.rst
              else
-                echo "No README found! Creating dummy README.rst"
-                echo "ONNX Runtime ROCm Build" > README.rst
+                echo "ONNX Runtime" > README.rst
              fi
           fi
-          
-          # 3. Copy Binaries (Fixing 'same file' error)
-          mkdir -p onnxruntime/capi
-          
-          echo "Copying compiled binaries..."
-          
-          # We look for files in the CURRENT dir ($BUILD_ROOT) but NOT inside onnxruntime/capi
-          # to prevent finding the file we just copied.
-          find . -maxdepth 1 -name "*onnxruntime_pybind11_state*.so" -exec cp {} onnxruntime/capi/ \; || true
-          find . -maxdepth 1 -name "*.so*" -exec cp {} onnxruntime/capi/ \; || true
 
-          # 4. DEBUG CHECK
-          echo "=== Debug: Listing Build Directory ==="
-          ls -la
-          echo "=== Debug: Listing CAPI Directory ==="
-          ls -la onnxruntime/capi
+      - name: Populate CAPI and Build Wheel
+        run: |
+          echo "Copying compiled binaries to source tree..."
           
-          # Verify .so exists
-          if [ -z "$(ls onnxruntime/capi/*onnxruntime_pybind11_state*.so 2>/dev/null)" ]; then
-             echo "CRITICAL ERROR: Extension module (.so) missing in capi folder!"
+          BUILD_ROOT="build/Release"
+          DEST_CAPI="onnxruntime/capi"
+          
+          # 1. Ensure the destination directory exists (it should, from checkout)
+          mkdir -p "$DEST_CAPI"
+          
+          # 2. Copy the Python Extension and Shared Libraries
+          #    We copy from build/Release directly into onnxruntime/capi in the source root.
+          
+          # Copy main python extension
+          find "$BUILD_ROOT" -name "*onnxruntime_pybind11_state*.so" -exec cp -v {} "$DEST_CAPI/" \;
+          
+          # Copy provider libraries (migraphx, shared, etc.)
+          find "$BUILD_ROOT" -maxdepth 1 -name "*.so*" -exec cp -v {} "$DEST_CAPI/" \;
+          
+          # 3. Verify Copy
+          if [ -z "$(ls $DEST_CAPI/*onnxruntime_pybind11_state*.so 2>/dev/null)" ]; then
+             echo "CRITICAL ERROR: Extension module not found in $DEST_CAPI"
+             ls -la "$BUILD_ROOT"
              exit 1
           fi
 
-          # 5. Build Wheel
-          echo "Starting setup.py bdist_wheel..."
+          echo "Binaries staged successfully."
+          ls -la "$DEST_CAPI"
+          
+          # 4. Build Wheel from Repository Root
+          #    This avoids the 'README not found' error because we are in the root.
+          echo "Building Wheel for Python 3.9..."
           python setup.py bdist_wheel \
             --use_rocm \
             --use_migraphx \
@@ -149,4 +137,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: onnxruntime-rocm-wheel
-          path: build/Release/dist/*.whl
+          path: dist/*.whl
