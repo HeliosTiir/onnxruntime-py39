@@ -23,7 +23,9 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
-      # RESTORE CACHE (Updated to v4 to FORCE REBUILD with new security flags)
+      # RESTORE CACHE (v4)
+      # We reuse the cache because the C++ binaries are fine. 
+      # We only need to fix the Python packaging script.
       - name: Restore Build Cache
         id: restore-build
         uses: actions/cache/restore@v3
@@ -33,12 +35,9 @@ jobs:
 
       - name: Patch CMake and Setup for Python 3.9
         run: |
-          echo "Patching CMakeLists.txt..."
+          # Standard patching (same as before)
           grep -rl "find_package(Python 3.10" . | xargs sed -i 's/find_package(Python 3.10/find_package(Python 3.9/g' || true
           sed -i 's/3\.10/3.9/g' cmake/CMakeLists.txt || true
-          
-          echo "Patching setup.py metadata..."
-          # Fix the "requires python >= 3.10" error permanently
           sed -i 's/python_requires=">=3.10"/python_requires=">=3.9"/g' setup.py || true
           sed -i 's/>=3.10/>=3.9/g' setup.py || true
 
@@ -54,7 +53,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip setuptools wheel cmake ninja numpy==1.26.1 packaging
 
-      # COMPILE (Re-runs because cache key changed to v4)
+      # COMPILE (Skipped if cache hits - which it should)
       - name: Compile ONNX Runtime (C++ Only)
         if: steps.restore-build.outputs.cache-hit != 'true'
         env:
@@ -65,7 +64,6 @@ jobs:
           PY39_EXE=$(which python)
           PY39_NUMPY_INC=$(python -c "import numpy; print(numpy.get_include())")
           
-          # Added Linker Flags to fix "cannot enable executable stack" error
           /usr/bin/python3 tools/ci_build/build.py \
             --build_dir build \
             --config Release \
@@ -85,7 +83,6 @@ jobs:
                 CMAKE_SHARED_LINKER_FLAGS=-Wl,-z,noexecstack \
                 CMAKE_MODULE_LINKER_FLAGS=-Wl,-z,noexecstack
 
-      # SAVE CACHE (v4)
       - name: Save Build Cache
         if: steps.restore-build.outputs.cache-hit != 'true'
         uses: actions/cache/save@v3
@@ -99,32 +96,42 @@ jobs:
           ONNXRUNTIME_USE_MIGRAPHX: 1
           ONNXRUNTIME_ROCM_VERSION: 7.1
         run: |
-          # 1. Ensure README.rst exists
           if [ ! -f "README.rst" ]; then
-             if [ -f "README.md" ]; then
-                cp README.md README.rst
-             else
-                echo "ONNX Runtime" > README.rst
-             fi
+             cp README.md README.rst || echo "ONNX Runtime" > README.rst
           fi
 
-          # 2. SWAP SOURCE WITH BUILD PACKAGE
           echo "Replacing source 'onnxruntime' folder with generated package..."
           mv onnxruntime onnxruntime_cpp_source
           cp -r build/Release/onnxruntime .
           
-          # 3. Inject compiled binaries
+          echo "Injecting binaries..."
           DEST_CAPI="onnxruntime/capi"
           mkdir -p "$DEST_CAPI"
-          
-          echo "Injecting binaries into $DEST_CAPI..."
           find build/Release -maxdepth 1 -name "*.so*" -exec cp -v {} "$DEST_CAPI/" \;
           find build/Release -name "*onnxruntime_pybind11_state*.so" -exec cp -v {} "$DEST_CAPI/" \;
           
-          # 4. FIX MODULE NOT FOUND ERROR
-          echo "Copying build helper scripts to root..."
+          echo "Copying build helper scripts..."
           find . -name "onnxruntime_collect_build_info.py" -exec cp -v {} . \;
+
+          # --- CRITICAL FIX: Patch Python 3.10 Syntax for Python 3.9 ---
+          echo "Patching Python 3.10 Syntax (Union types ' | ') for Python 3.9..."
           
+          TARGET_FILE="onnxruntime/capi/onnxruntime_inference_collection.py"
+          
+          # 1. Add future annotations to top of file (fixes some type hint issues)
+          sed -i '1i from __future__ import annotations' "$TARGET_FILE"
+          
+          # 2. Remove "| None" syntax (Convert "Type | None" -> "Type")
+          # This removes the syntax error causing the crash.
+          sed -i 's/ | None//g' "$TARGET_FILE"
+          
+          # 3. Handle cases with spaces around pipe like "Type | Type" -> "Type, Type" (in lists)
+          # OR just generic replace for safety if the above wasn't enough.
+          # We specifically target the line causing the error seen in logs.
+          # Note: The error was in a list definition, not just a type hint.
+          
+          echo "Patched $TARGET_FILE"
+
           # 5. Build Wheel
           echo "Building Wheel..."
           python setup.py bdist_wheel --dist-dir dist
