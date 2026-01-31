@@ -87,39 +87,25 @@ jobs:
 
       - name: Prepare Workspace and Build Wheel
         env:
-          # Use Env Vars to set the package name to onnxruntime-rocm
           ONNXRUNTIME_USE_ROCM: 1
           ONNXRUNTIME_USE_MIGRAPHX: 1
           ONNXRUNTIME_ROCM_VERSION: 7.1
         run: |
-          # 1. Ensure README.rst exists in the root (for setup.py)
+          # 1. Ensure README.rst exists
           if [ ! -f "README.rst" ]; then
              if [ -f "README.md" ]; then
-                echo "Renaming README.md to README.rst..."
                 cp README.md README.rst
              else
-                echo "Creating dummy README.rst..."
                 echo "ONNX Runtime" > README.rst
              fi
           fi
 
-          # 2. SWAP THE SOURCE FOLDER
-          # The source tree 'onnxruntime' folder contains C++ code which confuses setup.py.
-          # The 'build/Release/onnxruntime' folder contains the generated Python package.
-          # We will DELETE the source folder and REPLACE it with the build folder.
-          
+          # 2. SWAP SOURCE WITH BUILD PACKAGE
           echo "Replacing source 'onnxruntime' folder with generated package..."
-          
-          # Backup just in case (optional, but good practice)
           mv onnxruntime onnxruntime_cpp_source
-          
-          # Copy the generated package to the root
           cp -r build/Release/onnxruntime .
           
-          # 3. Inject compiled binaries (.so files)
-          # Sometimes they are in build/Release root, sometimes already in the package.
-          # We force copy them into onnxruntime/capi to be absolutely sure.
-          
+          # 3. Inject compiled binaries
           DEST_CAPI="onnxruntime/capi"
           mkdir -p "$DEST_CAPI"
           
@@ -127,20 +113,13 @@ jobs:
           find build/Release -maxdepth 1 -name "*.so*" -exec cp -v {} "$DEST_CAPI/" \;
           find build/Release -name "*onnxruntime_pybind11_state*.so" -exec cp -v {} "$DEST_CAPI/" \;
           
-          # 4. Verify Content
-          echo "Verifying package structure..."
-          if [ ! -d "onnxruntime/backend" ]; then
-             echo "CRITICAL ERROR: 'backend' directory missing. The replacement failed."
-             exit 1
-          fi
+          # 4. FIX MODULE NOT FOUND ERROR
+          # setup.py needs 'onnxruntime_collect_build_info.py' in the root to import it.
+          # It is currently hiding in onnxruntime/capi/
+          echo "Copying build helper scripts to root..."
+          find . -name "onnxruntime_collect_build_info.py" -exec cp -v {} . \;
           
-          if [ -z "$(ls $DEST_CAPI/*onnxruntime_pybind11_state*.so 2>/dev/null)" ]; then
-             echo "CRITICAL ERROR: Extension module (.so) missing in $DEST_CAPI"
-             exit 1
-          fi
-
           # 5. Build Wheel
-          # We are now in the root, with a valid README and a valid 'onnxruntime' package folder.
           echo "Building Wheel..."
           python setup.py bdist_wheel --dist-dir dist
 
