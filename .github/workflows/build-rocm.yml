@@ -23,7 +23,7 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
-      # RESTORE CACHE (v4)
+      # RESTORE CACHE (v4) - Reuses your compiled binaries!
       - name: Restore Build Cache
         id: restore-build
         uses: actions/cache/restore@v3
@@ -46,13 +46,13 @@ jobs:
           mv onnxruntime onnxruntime_src_backup
           cp -r build/Release/onnxruntime .
           
-          # Inject binaries
+          # Inject binaries into the folder structure
           mkdir -p onnxruntime/capi
-          echo "Copying binaries..."
+          echo "Staging binaries..."
           find build/Release -maxdepth 1 -name "*.so*" -exec cp -v {} "onnxruntime/capi/" \;
           find build/Release -name "*onnxruntime_pybind11_state*.so" -exec cp -v {} "onnxruntime/capi/" \;
           
-          # Copy helper script
+          # Copy helper script needed for setup
           find . -name "onnxruntime_collect_build_info.py" -exec cp -v {} . \;
 
       - name: Patch Code for Python 3.9
@@ -61,25 +61,27 @@ jobs:
           sed -i 's/python_requires=">=3.10"/python_requires=">=3.9"/g' setup.py || true
           sed -i 's/>=3.10/>=3.9/g' setup.py || true
           
-          # Force inclusion of .so files
-          sed -i "s/package_data='onnxruntime': data_files/package_data={'onnxruntime': data_files + ['*.so', 'capi/*.so']}/" setup.py || true
-
           echo "Sanitizing Syntax..."
           find onnxruntime -name "*.py" -exec sed -i '1i from __future__ import annotations' {} \;
           grep -rl " | None" onnxruntime | xargs sed -i 's/ | None//g'
 
-      - name: Build Wheel
+      - name: Build Wheel and Force-Inject Binaries
         env:
           ONNXRUNTIME_USE_ROCM: 1
           ONNXRUNTIME_USE_MIGRAPHX: 1
           ONNXRUNTIME_ROCM_VERSION: 7.1
         run: |
           echo "Building wheel..."
-          # FIX: Use python3 explicitly
           /usr/bin/python3 setup.py bdist_wheel --dist-dir dist
           
+          echo "--- FORCE INJECTING MISSING LIBRARIES ---"
+          # The wheel is just a zip. We add the files manually.
+          # We add 'onnxruntime/capi/*.so' into the zip.
+          # -u updates/adds files.
+          zip -u dist/*.whl onnxruntime/capi/*.so
+          
           echo "Verifying wheel contents..."
-          unzip -l dist/*.whl | grep migraphx || echo "::warning::MIGraphX lib still missing!"
+          unzip -l dist/*.whl | grep migraphx || echo "::error::MIGraphX lib STILL missing!"
 
       - name: Upload wheel
         uses: actions/upload-artifact@v4
