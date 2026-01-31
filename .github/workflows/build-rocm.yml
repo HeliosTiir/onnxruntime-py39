@@ -31,11 +31,17 @@ jobs:
           path: build
           key: onnx-rocm-build-v3
 
-      - name: Patch CMake for Python 3.9
+      - name: Patch CMake and Setup for Python 3.9
         run: |
-          echo "Patching CMakeLists.txt to allow Python 3.9..."
+          echo "Patching CMakeLists.txt..."
           grep -rl "find_package(Python 3.10" . | xargs sed -i 's/find_package(Python 3.10/find_package(Python 3.9/g' || true
           sed -i 's/3\.10/3.9/g' cmake/CMakeLists.txt || true
+          
+          echo "Patching setup.py metadata..."
+          # Fix the "requires python >= 3.10" metadata error
+          sed -i 's/python_requires=">=3.10"/python_requires=">=3.9"/g' setup.py || true
+          # Fallback generic replacement if format differs
+          sed -i 's/>=3.10/>=3.9/g' setup.py || true
 
       - name: Setup Python 3.9 (Target)
         uses: actions/setup-python@v4
@@ -114,8 +120,6 @@ jobs:
           find build/Release -name "*onnxruntime_pybind11_state*.so" -exec cp -v {} "$DEST_CAPI/" \;
           
           # 4. FIX MODULE NOT FOUND ERROR
-          # setup.py needs 'onnxruntime_collect_build_info.py' in the root to import it.
-          # It is currently hiding in onnxruntime/capi/
           echo "Copying build helper scripts to root..."
           find . -name "onnxruntime_collect_build_info.py" -exec cp -v {} . \;
           
