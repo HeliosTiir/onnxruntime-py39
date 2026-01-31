@@ -87,7 +87,6 @@ jobs:
 
       - name: Check/Create README.rst
         run: |
-          # setup.py requires README.rst. If only README.md exists, copy it.
           if [ ! -f "README.rst" ]; then
              if [ -f "README.md" ]; then
                 cp README.md README.rst
@@ -103,35 +102,22 @@ jobs:
           BUILD_ROOT="build/Release"
           DEST_CAPI="onnxruntime/capi"
           
-          # 1. Ensure the destination directory exists (it should, from checkout)
           mkdir -p "$DEST_CAPI"
           
-          # 2. Copy the Python Extension and Shared Libraries
-          #    We copy from build/Release directly into onnxruntime/capi in the source root.
-          
-          # Copy main python extension
+          # Copy binaries from build folder to source tree
           find "$BUILD_ROOT" -name "*onnxruntime_pybind11_state*.so" -exec cp -v {} "$DEST_CAPI/" \;
-          
-          # Copy provider libraries (migraphx, shared, etc.)
           find "$BUILD_ROOT" -maxdepth 1 -name "*.so*" -exec cp -v {} "$DEST_CAPI/" \;
           
-          # 3. Verify Copy
+          # Verify Copy
           if [ -z "$(ls $DEST_CAPI/*onnxruntime_pybind11_state*.so 2>/dev/null)" ]; then
              echo "CRITICAL ERROR: Extension module not found in $DEST_CAPI"
              ls -la "$BUILD_ROOT"
              exit 1
           fi
 
-          echo "Binaries staged successfully."
-          ls -la "$DEST_CAPI"
-          
-          # 4. Build Wheel from Repository Root
-          #    This avoids the 'README not found' error because we are in the root.
           echo "Building Wheel for Python 3.9..."
-          python setup.py bdist_wheel \
-            --use_rocm \
-            --use_migraphx \
-            --dist-dir dist
+          # FIX: flags passed BEFORE the command
+          python setup.py --use_rocm --use_migraphx bdist_wheel --dist-dir dist
 
       - name: Upload wheel
         uses: actions/upload-artifact@v4
