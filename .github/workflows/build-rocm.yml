@@ -85,50 +85,43 @@ jobs:
           path: build
           key: onnx-rocm-build-v3
 
-      - name: Full Stage and Build Wheel
+      - name: Prepare and Build Wheel (In-Source)
         env:
-          # CRITICAL FIX: Pass configuration as Env Vars instead of CLI flags
-          # This prevents the "option not recognized" error.
+          # Using ENV VARS instead of CLI flags to avoid 'option not recognized' error
           ONNXRUNTIME_USE_ROCM: 1
           ONNXRUNTIME_USE_MIGRAPHX: 1
           ONNXRUNTIME_ROCM_VERSION: 7.1
         run: |
-          echo "Creating Full Staging Area..."
+          echo "Injecting binaries into source tree..."
           
-          # 1. Define Paths
           BUILD_ROOT="build/Release"
-          STAGE_DIR="build/wheel_stage"
-          STAGE_CAPI="$STAGE_DIR/onnxruntime/capi"
+          DEST_CAPI="onnxruntime/capi"
           
-          # 2. Clone the Entire Repo to Stage (Excluding 'build')
-          rm -rf "$STAGE_DIR"
-          mkdir -p "$STAGE_DIR"
-          tar cf - --exclude=build . | (cd "$STAGE_DIR" && tar xf -)
+          # 1. Ensure CAPI dir exists
+          mkdir -p "$DEST_CAPI"
           
-          echo "Repo cloned to $STAGE_DIR"
+          # 2. Copy binaries (Shared Libs + Python Extension)
+          find "$BUILD_ROOT" -name "*onnxruntime_pybind11_state*.so" -exec cp -v {} "$DEST_CAPI/" \;
+          find "$BUILD_ROOT" -maxdepth 1 -name "*.so*" -exec cp -v {} "$DEST_CAPI/" \;
           
-          # 3. Inject Compiled Binaries into Stage
-          echo "Injecting binaries from $BUILD_ROOT..."
-          mkdir -p "$STAGE_CAPI"
-          
-          find "$BUILD_ROOT" -name "*onnxruntime_pybind11_state*.so" -exec cp -v {} "$STAGE_CAPI/" \;
-          find "$BUILD_ROOT" -maxdepth 1 -name "*.so*" -exec cp -v {} "$STAGE_CAPI/" \;
-          
-          # 4. Ensure README.rst exists
-          cd "$STAGE_DIR"
+          # 3. Validation
+          if [ -z "$(ls $DEST_CAPI/*onnxruntime_pybind11_state*.so 2>/dev/null)" ]; then
+             echo "CRITICAL ERROR: Extension module missing in $DEST_CAPI"
+             exit 1
+          fi
+
+          # 4. Handle README (In-Source)
           if [ ! -f "README.rst" ]; then
              if [ -f "README.md" ]; then
-                echo "Renaming README.md to README.rst"
                 cp README.md README.rst
              else
-                echo "Creating dummy README.rst"
                 echo "ONNX Runtime" > README.rst
              fi
           fi
           
-          # 5. Build Wheel (No custom flags, relying on Env Vars)
+          # 5. Build Wheel
           echo "Building Wheel..."
-          python setup.py bdist_wheel --dist-dir ../../dist
+          python setup.py bdist_wheel --dist-dir dist
 
       - name: Upload wheel
         uses: actions/upload-artifact@v4
