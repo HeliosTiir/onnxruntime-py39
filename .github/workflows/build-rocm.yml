@@ -85,67 +85,46 @@ jobs:
           path: build
           key: onnx-rocm-build-v3
 
-      - name: Package and Build Wheel
+      - name: Full Stage and Build Wheel
         run: |
-          # 1. Setup Directories
+          echo "Creating Full Staging Area..."
+          
+          # 1. Define Paths
           BUILD_ROOT="build/Release"
           STAGE_DIR="build/wheel_stage"
-          STAGE_PKG="$STAGE_DIR/onnxruntime"
-          STAGE_CAPI="$STAGE_PKG/capi"
+          STAGE_CAPI="$STAGE_DIR/onnxruntime/capi"
           
-          echo "Creating staging directory: $STAGE_DIR"
+          # 2. Clone the Entire Repo to Stage (Excluding 'build' to avoid recursion)
+          # We use tar to preserve permissions and structure perfectly
           rm -rf "$STAGE_DIR"
           mkdir -p "$STAGE_DIR"
+          tar cf - --exclude=build . | (cd "$STAGE_DIR" && tar xf -)
           
-          # 2. Copy Source Code and Setup Script
-          echo "Copying source code and setup.py..."
-          cp -r onnxruntime "$STAGE_DIR/"
-          cp setup.py "$STAGE_DIR/"
+          echo "Repo cloned to $STAGE_DIR"
           
-          # 3. Copy Critical Metadata (Fixes FileNotFoundError)
-          echo "Copying metadata (VERSION, LICENSE, README)..."
-          cp VERSION_NUMBER "$STAGE_DIR/" || echo "VERSION_NUMBER not found (skipping)"
-          cp LICENSE "$STAGE_DIR/" || echo "LICENSE not found (skipping)"
-          
-          # Robust README handling: Convert .md to .rst if needed
-          if [ -f "README.rst" ]; then
-             cp README.rst "$STAGE_DIR/"
-          elif [ -f "README.md" ]; then
-             echo "Converting README.md to README.rst..."
-             cp README.md "$STAGE_DIR/README.rst"
-          else
-             echo "WARNING: No README found. Creating dummy file."
-             echo "ONNX Runtime ROCm" > "$STAGE_DIR/README.rst"
-          fi
-          
-          # 4. Copy Compiled Binaries to CAPI
-          echo "Copying compiled binaries from $BUILD_ROOT..."
+          # 3. Inject Compiled Binaries into Stage
+          echo "Injecting binaries from $BUILD_ROOT..."
           mkdir -p "$STAGE_CAPI"
           
-          # Find and copy the Python extension and shared libs
+          # Copy binaries
           find "$BUILD_ROOT" -name "*onnxruntime_pybind11_state*.so" -exec cp -v {} "$STAGE_CAPI/" \;
           find "$BUILD_ROOT" -maxdepth 1 -name "*.so*" -exec cp -v {} "$STAGE_CAPI/" \;
           
-          # 5. Verify Staging
-          echo "=== Verifying Stage Content ==="
-          ls -la "$STAGE_DIR"
-          
-          # Ensure README exists in stage
-          if [ ! -f "$STAGE_DIR/README.rst" ]; then
-             echo "CRITICAL ERROR: README.rst is missing in $STAGE_DIR"
-             exit 1
-          fi
-          
-          # Ensure Binary exists in stage
-          if [ -z "$(ls $STAGE_CAPI/*onnxruntime_pybind11_state*.so 2>/dev/null)" ]; then
-             echo "CRITICAL ERROR: Extension module (.so) missing in $STAGE_CAPI"
-             exit 1
-          fi
-          
-          # 6. Build Wheel
-          echo "Building Wheel..."
+          # 4. Ensure README.rst exists (Fixes FileNotFoundError)
           cd "$STAGE_DIR"
-          # Flags passed BEFORE bdist_wheel
+          if [ ! -f "README.rst" ]; then
+             if [ -f "README.md" ]; then
+                echo "Renaming README.md to README.rst"
+                cp README.md README.rst
+             else
+                echo "Creating dummy README.rst"
+                echo "ONNX Runtime" > README.rst
+             fi
+          fi
+          
+          # 5. Build Wheel
+          # We use the clean stage environment which has full source code + our binaries
+          echo "Building Wheel..."
           python setup.py --use_rocm --use_migraphx bdist_wheel --dist-dir ../../dist
 
       - name: Upload wheel
