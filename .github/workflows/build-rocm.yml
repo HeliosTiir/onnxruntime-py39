@@ -86,6 +86,12 @@ jobs:
           key: onnx-rocm-build-v3
 
       - name: Full Stage and Build Wheel
+        env:
+          # CRITICAL FIX: Pass configuration as Env Vars instead of CLI flags
+          # This prevents the "option not recognized" error.
+          ONNXRUNTIME_USE_ROCM: 1
+          ONNXRUNTIME_USE_MIGRAPHX: 1
+          ONNXRUNTIME_ROCM_VERSION: 7.1
         run: |
           echo "Creating Full Staging Area..."
           
@@ -94,8 +100,7 @@ jobs:
           STAGE_DIR="build/wheel_stage"
           STAGE_CAPI="$STAGE_DIR/onnxruntime/capi"
           
-          # 2. Clone the Entire Repo to Stage (Excluding 'build' to avoid recursion)
-          # We use tar to preserve permissions and structure perfectly
+          # 2. Clone the Entire Repo to Stage (Excluding 'build')
           rm -rf "$STAGE_DIR"
           mkdir -p "$STAGE_DIR"
           tar cf - --exclude=build . | (cd "$STAGE_DIR" && tar xf -)
@@ -106,11 +111,10 @@ jobs:
           echo "Injecting binaries from $BUILD_ROOT..."
           mkdir -p "$STAGE_CAPI"
           
-          # Copy binaries
           find "$BUILD_ROOT" -name "*onnxruntime_pybind11_state*.so" -exec cp -v {} "$STAGE_CAPI/" \;
           find "$BUILD_ROOT" -maxdepth 1 -name "*.so*" -exec cp -v {} "$STAGE_CAPI/" \;
           
-          # 4. Ensure README.rst exists (Fixes FileNotFoundError)
+          # 4. Ensure README.rst exists
           cd "$STAGE_DIR"
           if [ ! -f "README.rst" ]; then
              if [ -f "README.md" ]; then
@@ -122,10 +126,9 @@ jobs:
              fi
           fi
           
-          # 5. Build Wheel
-          # We use the clean stage environment which has full source code + our binaries
+          # 5. Build Wheel (No custom flags, relying on Env Vars)
           echo "Building Wheel..."
-          python setup.py --use_rocm --use_migraphx bdist_wheel --dist-dir ../../dist
+          python setup.py bdist_wheel --dist-dir ../../dist
 
       - name: Upload wheel
         uses: actions/upload-artifact@v4
